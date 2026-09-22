@@ -970,9 +970,13 @@ impl SongScene {
             update_fn
         });
 
-        let save_fn: Option<SaveFn> = Some(Box::new({
+               let save_fn: Option<SaveFn> = Some(Box::new({
             let local_path = local_path.to_string();
+            let chart_id_for_ranked = id.unwrap_or(-1);
             move |new_rec| -> Result<()> {
+                let acc_for_ranked = new_rec.accuracy;
+
+                // 本地保存
                 let rec = get_data_mut()
                     .charts
                     .iter_mut()
@@ -985,9 +989,34 @@ impl SongScene {
                         save_data()?;
                     }
                 } else {
-                    *rec = Some(new_rec);
+                    *rec = Some(new_rec.clone());
                     save_data()?;
                 }
+
+                // 段位上传
+                let ranked_id = crate::scene::CURRENT_RANKED_ID.load(std::sync::atomic::Ordering::Relaxed);
+                if ranked_id >= 0 {
+                    tracing::info!(
+                        "[ranked] 段位 #{} 谱面 {} 打完，acc = {}",
+                        ranked_id, chart_id_for_ranked, acc_for_ranked
+                    );
+                    prpr::task::Task::new(async move {
+                        let url = format!("http://localhost:3000/api/ranked/{}/submit", ranked_id);
+                        match reqwest::Client::new()
+                            .post(&url)
+                            .json(&serde_json::json!({
+                                "accuracy": acc_for_ranked,
+                                "chart_id": chart_id_for_ranked,
+                            }))
+                            .send()
+                            .await
+                        {
+                            Ok(resp) => tracing::info!("[ranked] 上传响应 {:?}", resp.status()),
+                            Err(e) => tracing::warn!("[ranked] 上传失败: {:?}", e),
+                        }
+                    });
+                }
+
                 Ok(())
             }
         }));

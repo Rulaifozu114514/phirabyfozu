@@ -4,6 +4,9 @@ pub use coll::CollectionPage;
 mod event;
 pub use event::EventPage;
 
+mod ranked;
+pub use ranked::RankedPage;
+
 pub mod favorites;
 pub use favorites::FavoritesPage;
 

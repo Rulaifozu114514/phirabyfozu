@@ -1,7 +1,7 @@
 prpr_l10n::tl_file!("home");
 
 use super::{
-    load_font_with_cksum, set_bold_font, EventPage, LibraryPage, MessagePage, NextPage, Page, ResPackPage, SFader, SettingsPage, SharedState,
+    load_font_with_cksum, set_bold_font, EventPage, LibraryPage, MessagePage, NextPage, Page, RankedPage, ResPackPage, SFader, SettingsPage, SharedState,
     BOLD_FONT_CKSUM,
 };
 use crate::{
@@ -40,6 +40,8 @@ use std::{
 };
 use tap::Tap;
 use tracing::{info, warn};
+use lyon::math::point;
+use lyon::path::Path;
 
 const BOARD_SWITCH_TIME: f32 = 4.;
 const BOARD_TRANSIT_TIME: f32 = 1.2;
@@ -54,6 +56,18 @@ struct Version {
     url: String,
 }
 
+/// 构造一个平行四边形的 lyon Path。
+/// `skew` 是上边相对下边的水平偏移量。
+fn parallelogram_path(r: Rect, skew: f32) -> Path {
+    let mut builder = Path::builder();
+    builder.begin(point(r.x + skew, r.y));
+    builder.line_to(point(r.right(), r.y));
+    builder.line_to(point(r.right() - skew, r.bottom()));
+    builder.line_to(point(r.x, r.bottom()));
+    builder.end(true);
+    builder.build()
+}
+
 pub struct HomePage {
     icons: Arc<Icons>,
 
@@ -63,6 +77,7 @@ pub struct HomePage {
     btn_msg: DRectButton,
     btn_settings: DRectButton,
     btn_user: DRectButton,
+    btn_strict: RectButton,
 
     next_page: Option<NextPage>,
 
@@ -153,6 +168,7 @@ impl HomePage {
             btn_msg: DRectButton::new().with_radius(0.008).with_delta(-0.003).with_elevation(0.002),
             btn_settings: DRectButton::new().with_radius(0.008).with_delta(-0.003).with_elevation(0.002),
             btn_user: DRectButton::new().with_delta(-0.003),
+            btn_strict: RectButton::new(),
 
             next_page: None,
 
@@ -289,105 +305,151 @@ impl HomePage {
     }
 
     fn render_not_char(&mut self, ui: &mut Ui, s: &mut SharedState) {
-        let t = s.t;
+        let screen = ui.screen_rect();
 
-        let pad = 0.04;
-        // play button
-        let r = Rect::new(0., -0.33, 0.83, 0.45);
-        let mat = self.btn_play_3d.now(ui, r, t);
-        let top = ui.with_gl(mat, |ui| {
+        // ============ 顶部：标题 ============
+    ui.text("Phira.fozu")
+    .pos(screen.center().x, screen.y + 0.05)
+    .anchor(0.5, 0.0)
+    .size(1.2)
+    .color(WHITE)
+    .draw();
+
+        // ============ 中间：立绘由 char_scroll 处理 ============
+        // 无需改
+
+        // ============ 底部：一整条平行四边形按钮组 ============
+        let bar_r = Rect::new(screen.x + 0.05, screen.bottom() - 0.32, screen.w - 0.1, 0.22);
+        ui.fill_path(&parallelogram_path(bar_r, 0.05), semi_black(0.55));
+
+        let cell_count = 5;
+        let cell_w = bar_r.w / cell_count as f32;
+
+        // 分隔线
+        for i in 1..cell_count {
+            let x = bar_r.x + cell_w * i as f32;
+            ui.fill_rect(
+                Rect::new(x - 0.001, bar_r.y + 0.03, 0.002, bar_r.h - 0.06),
+                semi_white(0.15),
+            );
+        }
+
+        // 0: 游玩
+        {
+            let r = Rect::new(bar_r.x, bar_r.y, cell_w, bar_r.h);
             s.render_fader(ui, |ui| {
-                let top = r.bottom() + 0.02;
-                let rad = self.btn_play.config.radius;
-                self.btn_play.render_shadow(ui, r, t, |ui, path| {
-                    ui.fill_path(&path, semi_black(0.4));
-                    if let Some(cur) = &self.board_tex {
-                        let p = (t - self.board_last_time) / BOARD_TRANSIT_TIME;
-                        if p > 1. {
-                            self.board_tex_last = None;
-                            ui.fill_path(&path, (**cur, r));
-                        } else if let Some(last) = &self.board_tex_last {
-                            let (cur, last) = if self.board_dir { (last, cur) } else { (cur, last) };
-                            let p = 1. - (1. - p).powi(3);
-                            let p = if self.board_dir { 1. - p } else { p };
-                            clip_rounded_rect(ui, r, rad, |ui| {
-                                let mut nr = r;
-                                nr.h = r.h * (1. - p);
-                                ui.fill_rect(nr, (**last, nr));
-
-                                nr.h = r.h * p;
-                                nr.y = r.bottom() - nr.h;
-                                ui.fill_rect(nr, (**cur, nr));
-                            });
-                        } else {
-                            ui.fill_path(&path, (**cur, r, ScaleType::CropCenter, semi_white(p)));
-                        }
-                    }
-                    ui.fill_path(&path, (semi_black(0.7), (r.x, r.y), Color::default(), (r.x + 0.6, r.y)));
-                    ui.text(tl!("play")).pos(r.x + pad, r.y + pad).draw();
-                    let r = Rect::new(r.x + 0.02, r.bottom() - 0.18, 0.17, 0.17);
-                    ui.fill_rect(r, (*self.icons.play, r, ScaleType::Fit, semi_white(0.6)));
-                });
-                top + 0.03
-            })
-        });
-
-        let text_and_icon = |s: &mut SharedState, ui: &mut Ui, r: Rect, btn: &mut DRectButton, text, icon| {
-            let ow = r.w;
-            s.render_fader(ui, |ui| {
-                btn.render_shadow(ui, r, t, |ui, path| {
-                    ui.fill_path(&path, semi_black(0.4));
-                    let ir = Rect::new(r.x + 0.02, r.bottom() - 0.08, 0.14, 0.14);
-                    ui.text(text).pos(r.x + 0.026, r.y + 0.026).size(0.7 * r.w / ow).draw();
-                    ui.fill_rect(
-                        {
-                            let mut ir = ir;
-                            ir.h = ir.h.min(r.bottom() - ir.y);
-                            ir
-                        },
-                        (icon, ir, ScaleType::Fit, semi_white(0.4)),
-                    );
-                });
+                let icon_r = Rect::new(r.center().x - 0.06, r.center().y - 0.08, 0.12, 0.12);
+                ui.fill_rect(icon_r, (*self.icons.play, icon_r, ScaleType::Fit, WHITE));
+                ui.text(tl!("play"))
+                    .pos(r.center().x, r.bottom() - 0.045)
+                    .anchor(0.5, 0.0)
+                    .size(0.45)
+                    .color(semi_white(0.85))
+                    .draw();
             });
+            self.btn_play.build(ui, s.t, r, |_ui, _| {});
+        }
+
+        // 1: 活动
+        {
+            let r = Rect::new(bar_r.x + cell_w, bar_r.y, cell_w, bar_r.h);
+            s.render_fader(ui, |ui| {
+                let icon_r = Rect::new(r.center().x - 0.05, r.center().y - 0.08, 0.1, 0.1);
+                ui.fill_rect(icon_r, (*self.icons.medal, icon_r, ScaleType::Fit, semi_white(0.85)));
+                ui.text("段位认证")
+                    .pos(r.center().x, r.bottom() - 0.045)
+                    .anchor(0.5, 0.0)
+                    .size(0.4)
+                    .color(semi_white(0.7))
+                    .draw();
+            });
+            self.btn_event.build(ui, s.t, r, |_ui, _| {});
+        }
+
+        // 2: 资源包
+        {
+            let r = Rect::new(bar_r.x + cell_w * 2., bar_r.y, cell_w, bar_r.h);
+            s.render_fader(ui, |ui| {
+                let icon_r = Rect::new(r.center().x - 0.05, r.center().y - 0.08, 0.1, 0.1);
+                ui.fill_rect(icon_r, (*self.icons.respack, icon_r, ScaleType::Fit, semi_white(0.85)));
+                ui.text(tl!("respack"))
+                    .pos(r.center().x, r.bottom() - 0.045)
+                    .anchor(0.5, 0.0)
+                    .size(0.4)
+                    .color(semi_white(0.7))
+                    .draw();
+            });
+            self.btn_respack.build(ui, s.t, r, |_ui, _| {});
+        }
+
+        // 3: 消息
+        {
+            let r = Rect::new(bar_r.x + cell_w * 3., bar_r.y, cell_w, bar_r.h);
+            s.render_fader(ui, |ui| {
+                let icon_r = Rect::new(r.center().x - 0.05, r.center().y - 0.08, 0.1, 0.1);
+                ui.fill_rect(icon_r, (*self.icons.msg, icon_r, ScaleType::Fit, semi_white(0.85)));
+                if self.has_new {
+                    ui.fill_circle(icon_r.right(), icon_r.y, 0.012, RED);
+                }
+                ui.text("消息")
+                    .pos(r.center().x, r.bottom() - 0.045)
+                    .anchor(0.5, 0.0)
+                    .size(0.4)
+                    .color(semi_white(0.7))
+                    .draw();
+            });
+            self.btn_msg.build(ui, s.t, r, |_ui, _| {});
+        }
+
+        // 4: 设置
+        {
+            let r = Rect::new(bar_r.x + cell_w * 4., bar_r.y, cell_w, bar_r.h);
+            s.render_fader(ui, |ui| {
+                let icon_r = Rect::new(r.center().x - 0.05, r.center().y - 0.08, 0.1, 0.1);
+                ui.fill_rect(icon_r, (*self.icons.settings, icon_r, ScaleType::Fit, semi_white(0.85)));
+                ui.text("设置")
+                    .pos(r.center().x, r.bottom() - 0.045)
+                    .anchor(0.5, 0.0)
+                    .size(0.4)
+                    .color(semi_white(0.7))
+                    .draw();
+            });
+            self.btn_settings.build(ui, s.t, r, |_ui, _| {});
+        }
+
+                // ============ 严判模式开关（右侧，按钮条上方） ============
+        let strict_on = prpr::judge::STRICT_MODE.load(std::sync::atomic::Ordering::Relaxed);
+        // 位置：屏幕右侧，距右边 0.05；竖直方向在按钮条上方
+        let strict_btn_r = Rect::new(
+            screen.right() - 0.47,          // 右边 0.47（含宽度）
+            screen.bottom() - 0.55,          // 比按钮条高
+            0.42,                            // 宽度（够放"严判: 开"）
+            0.10,                            // 高度
+        );
+
+        let bg_color = if strict_on {
+            Color::new(1.0, 0.45, 0.2, 0.9)
+        } else {
+            semi_black(0.55)
         };
+        ui.fill_path(&parallelogram_path(strict_btn_r, 0.02), bg_color);
 
-        let mat = self.btn_other_3d.now(ui, Rect::new(0., top - 0.4, 0.83, 0.23), t);
-        ui.with_gl(mat, |ui| {
-            let r = Rect::new(0., top, 0.38, 0.23);
-            text_and_icon(s, ui, r, &mut self.btn_event, tl!("event"), *self.icons.medal);
+        let label = if strict_on { "严判: 开" } else { "严判: 关" };
+        ui.text(label)
+            .pos(strict_btn_r.center().x, strict_btn_r.center().y)
+            .anchor(0.5, 0.5)
+            .size(0.38)                      // 小一点
+            .color(WHITE)
+            .draw();
 
-            let r = Rect::new(r.right() + 0.02, top, 0.29, 0.23);
-            text_and_icon(s, ui, r, &mut self.btn_respack, tl!("respack"), *self.icons.respack);
-
-            let lf = r.right() + 0.02;
-
-            s.render_fader(ui, |ui| {
-                let r = Rect::new(lf, top, 0.11, 0.11);
-                self.btn_msg.render_shadow(ui, r, t, |ui, path| {
-                    ui.fill_path(&path, semi_black(0.4));
-                    let r = r.feather(-0.01);
-                    ui.fill_rect(r, (*self.icons.msg, r, ScaleType::Fit));
-                    if self.has_new {
-                        let pad = 0.007;
-                        ui.fill_circle(r.right() - pad, r.y + pad, 0.01, RED);
-                    }
-                });
-
-                let r = Rect::new(lf, top + 0.12, 0.11, 0.11);
-                self.btn_settings.render_shadow(ui, r, t, |ui, path| {
-                    ui.fill_path(&path, semi_black(0.4));
-                    let r = r.feather(0.004);
-                    ui.fill_rect(r, (*self.icons.settings, r, ScaleType::Fit));
-                });
-            });
-        });
+        self.btn_strict.set(ui, strict_btn_r);
     }
 }
 
 impl Page for HomePage {
     fn label(&self) -> Cow<'static, str> {
-        "PHIRA".into()
-    }
+    "".into()
+}
 
     fn enter(&mut self, s: &mut SharedState) -> Result<()> {
         if self.need_back {
@@ -421,14 +483,8 @@ impl Page for HomePage {
                 return Ok(true);
             }
             if self.btn_event.touch(touch, t) {
-                if check_read_tos_and_policy(true, true) {
-                    button_hit_large();
-                    if get_data().me.is_none() {
-                        self.login.enter(t);
-                    } else {
-                        self.next_page = Some(NextPage::Overlay(Box::new(EventPage::new(Arc::clone(&self.icons), s.icons.clone()))));
-                    }
-                }
+                button_hit_large();
+                self.next_page = Some(NextPage::Overlay(Box::new(RankedPage::new(Arc::clone(&self.icons)))));
                 return Ok(true);
             }
             if self.btn_respack.touch(touch, t) {
@@ -461,6 +517,12 @@ impl Page for HomePage {
             } else {
                 self.login.enter(t);
             }
+            return Ok(true);
+        }
+        if self.btn_strict.touch(touch) {
+            let was = prpr::judge::STRICT_MODE.load(std::sync::atomic::Ordering::Relaxed);
+            prpr::judge::STRICT_MODE.store(!was, std::sync::atomic::Ordering::Relaxed);
+            info!("[strict] 严判模式: {}", if !was { "开" } else { "关" });
             return Ok(true);
         }
         #[cfg(feature = "hykb")]
@@ -837,7 +899,7 @@ impl Page for HomePage {
             let rt = ct.0 - rad - 0.02;
             if let Some(me) = &get_data().me {
                 ui.text(&me.name).pos(rt, r.center().y + 0.002).anchor(1., 1.).size(0.6).draw();
-                ui.text(format!("RKS {:.2}", me.rks))
+                ui.text(format!("PP {:.2}", me.rks))
                     .pos(rt, r.center().y + 0.008)
                     .anchor(1., 0.)
                     .size(0.4)

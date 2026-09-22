@@ -1,5 +1,10 @@
 prpr_l10n::tl_file!("import" itl);
 
+use std::sync::atomic::AtomicI32;
+
+/// 当前挑战的段位 ID（-1 = 非段位模式）
+pub static CURRENT_RANKED_ID: AtomicI32 = AtomicI32::new(-1);
+
 mod chart_order;
 pub use chart_order::ChartOrder;
 

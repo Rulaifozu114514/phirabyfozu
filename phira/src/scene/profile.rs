@@ -479,7 +479,7 @@ impl Scene for ProfileScene {
                         .color(semi_white(0.5))
                         .draw();
                     let r = ui
-                        .text(format!("RKS {:.2}", user.rks))
+                        .text(format!("PP {:.2}", user.rks))
                         .size(0.5)
                         .pos(cx, r.bottom() + 0.01)
                         .anchor(0.5, 0.)
